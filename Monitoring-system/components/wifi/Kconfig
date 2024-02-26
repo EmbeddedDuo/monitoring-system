@@ -1,0 +1,9 @@
+menu "Wifi Configurations"
+    config EXAMPLE_WIFI_SSID
+        string "SSID of Network"
+        default "Alo"
+
+    config EXAMPLE_WIFI_PASSWORD
+        string "Password of Network"
+        default "najwfa2020"
+endmenu
