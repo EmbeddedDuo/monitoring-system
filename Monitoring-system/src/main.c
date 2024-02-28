@@ -13,9 +13,11 @@
 #include <string.h>
 #include <esp_log.h>
 #include "esp_adc/adc_cali.h"
-#include "driver/adc.h"
-#include "esp_adc_cal.h"
+#include <driver/adc.h>
+#include "esp_adc/adc_oneshot.h"
+#include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
+#include <esp_log.h>
 #include <inttypes.h>
 
 #include <freertos/queue.h>
@@ -28,132 +30,236 @@ static const char *mqttTag = "mqtt";
 
 #define ADC_ATTEN_0db 0
 #define ADC_WIDTH_12Bit 3
-static const adc_unit_t unit = ADC_UNIT_1;
 #define DEFAULT_VREF 1100
+
+static char *TAG = "adc_oneshot";
+
+adc_oneshot_unit_handle_t adc1_handle;
+adc_cali_handle_t adc1_cali_chan4_handle = NULL;
 
 QueueHandle_t soundToMQTTQueue;
 QueueHandle_t motionToMQTTQueue;
 
 struct average_data_t
 {
-    uint32_t avg_sound [10];
-    uint32_t avg_motion [10];
+    int avg_sound[10];
+    int avg_motion[10];
 
 } average_data;
 
-bool arraytracker(uint32_t val, int index, int sensorTyp)
-{
+int avg_sound_SIZE = sizeof(average_data.avg_sound) / sizeof(average_data.avg_sound[0]);
+int avg_motion_SIZE = (sizeof(average_data.avg_motion) / sizeof(average_data.avg_motion[0]));
 
-    if (index == (sizeof(average_data.avg_sound) / sizeof((average_data.avg_sound[0]))))
+static bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle)
+{
+    adc_cali_handle_t handle = NULL;
+    esp_err_t ret = ESP_FAIL;
+    bool calibrated = false;
+
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+    if (!calibrated)
     {
-        return true;
+        ESP_LOGI(TAG, "calibration scheme version is %s", "Curve Fitting");
+        adc_cali_curve_fitting_config_t cali_config = {
+            .unit_id = unit,
+            .chan = channel,
+            .atten = atten,
+            .bitwidth = ADC_BITWIDTH_DEFAULT,
+        };
+        ret = adc_cali_create_scheme_curve_fitting(&cali_config, &handle);
+        if (ret == ESP_OK)
+        {
+            calibrated = true;
+        }
     }
+#endif
+
+#if ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
+    if (!calibrated)
+    {
+        ESP_LOGI(TAG, "calibration scheme version is %s", "Line Fitting");
+        adc_cali_line_fitting_config_t cali_config = {
+            .unit_id = unit,
+            .atten = atten,
+            .bitwidth = ADC_BITWIDTH_DEFAULT,
+        };
+        ret = adc_cali_create_scheme_line_fitting(&cali_config, &handle);
+        if (ret == ESP_OK)
+        {
+            calibrated = true;
+        }
+    }
+#endif
+
+    *out_handle = handle;
+    if (ret == ESP_OK)
+    {
+        ESP_LOGI(TAG, "Calibration Success");
+    }
+    else if (ret == ESP_ERR_NOT_SUPPORTED || !calibrated)
+    {
+        ESP_LOGW(TAG, "eFuse not burnt, skip software calibration");
+    }
+    else
+    {
+        ESP_LOGE(TAG, "Invalid arg or no memory");
+    }
+
+    return calibrated;
+}
+
+void initializeADC_OneShot()
+{
+    adc_oneshot_unit_init_cfg_t init_config1 = {
+        .unit_id = ADC_UNIT_1,
+        .ulp_mode = ADC_ULP_MODE_DISABLE,
+    };
+    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config1, &adc1_handle));
+
+    adc_oneshot_chan_cfg_t config = {
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+        .atten = ADC_ATTEN_DB_0,
+    };
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, ADC1_CHANNEL_4, &config));
+}
+
+void arraytracker(int val, int index, int sensorTyp)
+{
 
     switch (sensorTyp)
     {
     case 1:
-        average_data.avg_sound[index] = val;
+        if (index < avg_sound_SIZE)
+        {
+            average_data.avg_sound[index] = val;
+        }
+
         break;
     case 2:
-        average_data.avg_motion[index] = val;
+        if (index < avg_motion_SIZE)
+        {
+            average_data.avg_motion[index] = val;
+        }
+
         break;
 
     default:
         break;
     }
-
-    return false;
 }
 
-uint32_t avgCalcu(uint32_t * values)
+int avgCalcu(int *values, int valCo)
 {
-    int size = (sizeof(values) / sizeof(values));
-    uint32_t sum = 0;
-    for (int i = 0; i < size; i++)
+
+    uint32_t sum = 0.0;
+    for (int i = 0; i < valCo; i++)
     {
         sum += values[i];
     }
 
-    return sum / size;
+    return (sum / valCo);
+}
+
+char *printArray(int *x, int size, char *arr)
+{
+
+    int offset = 0;
+    for (int i = 0; i < size; i++)
+    {
+        offset += sprintf(arr + offset, "%d", x[i]);
+        if (i < size - 1)
+        {
+            offset += sprintf(arr + offset, ", ");
+        }
+    }
+
+    return arr;
 }
 
 void sound_sensor(void *pvParameters)
 {
-    uint32_t reading;
-    uint32_t voltage;
 
-    ESP_ERROR_CHECK(adc1_config_width(ADC_WIDTH_BIT_12));
-    ESP_ERROR_CHECK(adc1_config_channel_atten(ADC1_CHANNEL_4, ADC_ATTEN_DB_11));
-
-    esp_adc_cal_characteristics_t *adc_chars = calloc(1, sizeof(esp_adc_cal_characteristics_t));
-    esp_adc_cal_value_t val_type = esp_adc_cal_characterize(unit, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 0, adc_chars);
-    // Check type of calibration value used to characterize ADC
-    if (val_type == ESP_ADC_CAL_VAL_EFUSE_VREF)
-    {
-        printf("eFuse Vref\n");
-    }
-    else if (val_type == ESP_ADC_CAL_VAL_EFUSE_TP)
-    {
-        printf("Two Point\n");
-    }
-    else
-    {
-        printf("Default\n");
-    }
+    
+    int adc_raw;
+    int voltage;
 
     while (true)
     {
+        int c = 0;
+        while (c < 10)
+        {
+            ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, ADC1_CHANNEL_4, &adc_raw));
 
-        reading = adc1_get_raw(ADC1_CHANNEL_4);
-        voltage = esp_adc_cal_raw_to_voltage(reading, adc_chars);
-        ESP_LOGI("Sound Sensor", "%lu mV", voltage);
+            bool do_calibration1_chan0 = example_adc_calibration_init(ADC_UNIT_1, ADC1_CHANNEL_4, ADC_ATTEN_DB_0, &adc1_cali_chan4_handle);
 
-        if (xQueueSend(soundToMQTTQueue, &voltage, ((TickType_t)5)) == pdTRUE)
+            ESP_LOGI("sound_sensor_one_shot", "sound_sensor_one_shot raw value: %d", adc_raw);
+            if (do_calibration1_chan0)
+            {
+                ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan4_handle, adc_raw, &voltage));
+                ESP_LOGI("sound_sensor_one_shot", "sound_sensor_one_shot voltage %dmV", voltage);
+            }
+
+            vTaskDelay(pdMS_TO_TICKS(100));
+            arraytracker(voltage, c, 1);
+            c++;
+        }
+
+        char printarr[avg_sound_SIZE * 2 - 1];
+        char *result = printArray(average_data.avg_sound, avg_sound_SIZE, printarr);
+
+        printf("sound_array : %s \n", result);
+
+        int averag_sound_calculated = avgCalcu(average_data.avg_sound, c);
+
+        printf("%d \n", averag_sound_calculated);
+
+        if (xQueueSend(soundToMQTTQueue, &averag_sound_calculated, ((TickType_t)5)) == pdTRUE)
         {
             ESP_LOGI("soundToMQTTQueue", "Sound Sent ");
         }
-
-        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
 void motion_sensor(void *pvParameters)
 {
-    uint32_t reading;
-    uint32_t voltage;
+    int adc_raw;
+    int voltage;
 
-    ESP_ERROR_CHECK(adc1_config_width(ADC_WIDTH_BIT_12));
-    ESP_ERROR_CHECK(adc1_config_channel_atten(ADC1_CHANNEL_4, ADC_ATTEN_DB_11));
-
-    esp_adc_cal_characteristics_t *adc_chars = calloc(1, sizeof(esp_adc_cal_characteristics_t));
-    esp_adc_cal_value_t val_type = esp_adc_cal_characterize(unit, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 0, adc_chars);
-    // Check type of calibration value used to characterize ADC
-    if (val_type == ESP_ADC_CAL_VAL_EFUSE_VREF)
-    {
-        printf("eFuse Vref\n");
-    }
-    else if (val_type == ESP_ADC_CAL_VAL_EFUSE_TP)
-    {
-        printf("Two Point\n");
-    }
-    else
-    {
-        printf("Default\n");
-    }
 
     while (true)
     {
+        int c = 0;
+        while (c < 10)
+        {
+            ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, ADC1_CHANNEL_4, &adc_raw));
 
-        reading = adc1_get_raw(ADC1_CHANNEL_5);
-        voltage = esp_adc_cal_raw_to_voltage(reading, adc_chars);
-        ESP_LOGI("Motion Sensor", "%lu mV", voltage);
+            bool do_calibration1_chan0 = example_adc_calibration_init(ADC_UNIT_1, ADC1_CHANNEL_4, ADC_ATTEN_DB_0, &adc1_cali_chan4_handle);
 
-        if (xQueueSend(motionToMQTTQueue, &voltage, ((TickType_t)5)) == pdTRUE)
+            ESP_LOGI("sound_sensor_one_shot", "sound_sensor_one_shot raw value: %d", adc_raw);
+            if (do_calibration1_chan0)
+            {
+                ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan4_handle, adc_raw, &voltage));
+                ESP_LOGI("sound_sensor_one_shot", "sound_sensor_one_shot voltage %dmV", voltage);
+            }
+
+            vTaskDelay(pdMS_TO_TICKS(100));
+            arraytracker(voltage, c, 2);
+            c++;
+        }
+
+        char printarr[avg_motion_SIZE * 2 - 1];
+        char *result = printArray(average_data.avg_motion, sizeof(average_data.avg_motion) / sizeof(average_data.avg_motion[0]), printarr);
+
+        printf("motion_array: %s\n", result);
+
+        int averag_motion_calculated = avgCalcu(average_data.avg_motion, c);
+
+        printf("%d \n", averag_motion_calculated);
+
+        if (xQueueSend(motionToMQTTQueue, &averag_motion_calculated, ((TickType_t)5)) == pdTRUE)
         {
             ESP_LOGI("motionToMQTTQueue", "motion Sent ");
         }
-
-        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -219,12 +325,6 @@ esp_mqtt_client_handle_t mqttclient()
 void publish_message()
 {
 
-    int index1 = 0;
-    int index2 = 0;
-
-    bool motionArrState = false;
-    bool soundArrState = false;
-
     while (1)
     {
         uint32_t sound;
@@ -233,45 +333,28 @@ void publish_message()
         if (xQueueReceive(soundToMQTTQueue, &sound, ((TickType_t)5)) == pdTRUE)
         {
             ESP_LOGI("soundToMQTTQueue", "Sound received: %lu \n", sound);
-            soundArrState = arraytracker(sound, index1, 1);
         }
 
         if (xQueueReceive(motionToMQTTQueue, &motion, ((TickType_t)5)) == pdTRUE)
         {
             ESP_LOGI("soundToMQTTQueue", "motion received: %lu \n", motion);
-            motionArrState = arraytracker(motion, index2, 2);
-           
         }
 
-        if (motionArrState && soundArrState)
+        char buffer1[10];
+        char buffer2[10];
+
+        int8_t ret1 = snprintf(buffer1, sizeof buffer1, "%.2lu", sound);
+        int8_t ret2 = snprintf(buffer2, sizeof buffer2, "%.2lu", motion);
+
+        if (ret1 < 0 || ret2 < 0)
         {
-            uint32_t avgSound = avgCalcu(average_data.avg_sound);
-            uint32_t avgMotion = avgCalcu(average_data.avg_motion);
-
-            ESP_LOGI("AVGValue", "sound avg: %lu \n", avgSound);
-            ESP_LOGI("AVGValue", "motion avg: %lu \n", avgMotion);
-
-            char buffer1[10];
-            char buffer2[10];
-
-            int8_t ret1 = snprintf(buffer1, sizeof buffer1, "%.2lu", avgSound);
-            int8_t ret2 = snprintf(buffer2, sizeof buffer2, "%.2lu", avgMotion);
-
-            if (ret1 < 0 || ret2 < 0)
-            {
-                ESP_LOGE("convert float to char", "failed to convert float to char");
-            }
-
-            esp_mqtt_client_publish(client, "monitoring-system/sound_sensor", buffer1, 0, 0, 0);
-            esp_mqtt_client_publish(client, "monitoring-system/motion_sensor", buffer2, 0, 0, 0);
-
-            index1 = 0, index2 = 0;
-        }else {
-             index2++;
-             index1++;
-
+            ESP_LOGE("convert float to char", "failed to convert float to char");
         }
-        vTaskDelay(pdMS_TO_TICKS(100));
+
+        esp_mqtt_client_publish(client, "monitoring-system/sound_sensor", buffer1, 0, 0, 0);
+        esp_mqtt_client_publish(client, "monitoring-system/motion_sensor", buffer2, 0, 0, 0);
+
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 
@@ -308,9 +391,9 @@ void app_main()
         ESP_LOGE("soundToMQTTQueue ", "Queue couldn't be created");
     }
 
-     xTaskCreate(publish_message, "publish message", configMINIMAL_STACK_SIZE * 5, NULL, 5, NULL);
+    xTaskCreate(publish_message, "publish message", configMINIMAL_STACK_SIZE * 5, NULL, 5, NULL);
 
     xTaskCreate(sound_sensor, "Sound Sensor", configMINIMAL_STACK_SIZE * 5, NULL, 5, NULL);
 
-     xTaskCreate(motion_sensor, "motion Sensor", configMINIMAL_STACK_SIZE * 5, NULL, 5, NULL);
+    xTaskCreate(motion_sensor, "motion Sensor", configMINIMAL_STACK_SIZE * 5, NULL, 5, NULL);
 }
