@@ -34,6 +34,49 @@ static const adc_unit_t unit = ADC_UNIT_1;
 QueueHandle_t soundToMQTTQueue;
 QueueHandle_t motionToMQTTQueue;
 
+struct average_data_t
+{
+    uint32_t avg_sound [10];
+    uint32_t avg_motion [10];
+
+} average_data;
+
+bool arraytracker(uint32_t val, int index, int sensorTyp)
+{
+
+    if (index == (sizeof(average_data.avg_sound) / sizeof((average_data.avg_sound[0]))))
+    {
+        return true;
+    }
+
+    switch (sensorTyp)
+    {
+    case 1:
+        average_data.avg_sound[index] = val;
+        break;
+    case 2:
+        average_data.avg_motion[index] = val;
+        break;
+
+    default:
+        break;
+    }
+
+    return false;
+}
+
+uint32_t avgCalcu(uint32_t * values)
+{
+    int size = (sizeof(values) / sizeof(values));
+    uint32_t sum = 0;
+    for (int i = 0; i < size; i++)
+    {
+        sum += values[i];
+    }
+
+    return sum / size;
+}
+
 void sound_sensor(void *pvParameters)
 {
     uint32_t reading;
@@ -70,7 +113,7 @@ void sound_sensor(void *pvParameters)
             ESP_LOGI("soundToMQTTQueue", "Sound Sent ");
         }
 
-         vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -105,13 +148,12 @@ void motion_sensor(void *pvParameters)
         voltage = esp_adc_cal_raw_to_voltage(reading, adc_chars);
         ESP_LOGI("Motion Sensor", "%lu mV", voltage);
 
-        
         if (xQueueSend(motionToMQTTQueue, &voltage, ((TickType_t)5)) == pdTRUE)
         {
             ESP_LOGI("motionToMQTTQueue", "motion Sent ");
-        } 
+        }
 
-         vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -176,6 +218,13 @@ esp_mqtt_client_handle_t mqttclient()
 }
 void publish_message()
 {
+
+    int index1 = 0;
+    int index2 = 0;
+
+    bool motionArrState = false;
+    bool soundArrState = false;
+
     while (1)
     {
         uint32_t sound;
@@ -184,26 +233,44 @@ void publish_message()
         if (xQueueReceive(soundToMQTTQueue, &sound, ((TickType_t)5)) == pdTRUE)
         {
             ESP_LOGI("soundToMQTTQueue", "Sound received: %lu \n", sound);
+            soundArrState = arraytracker(sound, index1, 1);
         }
 
         if (xQueueReceive(motionToMQTTQueue, &motion, ((TickType_t)5)) == pdTRUE)
         {
             ESP_LOGI("soundToMQTTQueue", "motion received: %lu \n", motion);
+            motionArrState = arraytracker(motion, index2, 2);
+           
         }
 
-        char buffer1[10];
-        char buffer2[10];
-
-        int8_t ret1 = snprintf(buffer1, sizeof buffer1, "%.2lu", sound);
-        int8_t ret2 = snprintf(buffer2, sizeof buffer2, "%.2lu", motion);
-
-        if (ret1 < 0 || ret2 < 0)
+        if (motionArrState && soundArrState)
         {
-            ESP_LOGE("convert float to char", "failed to convert float to char");
-        }
+            uint32_t avgSound = avgCalcu(average_data.avg_sound);
+            uint32_t avgMotion = avgCalcu(average_data.avg_motion);
 
-        esp_mqtt_client_publish(client, "monitoring-system/sound_sensor", buffer1, 0, 0, 0);
-        esp_mqtt_client_publish(client, "monitoring-system/motion_sensor", buffer2, 0, 0, 0);
+            ESP_LOGI("AVGValue", "sound avg: %lu \n", avgSound);
+            ESP_LOGI("AVGValue", "motion avg: %lu \n", avgMotion);
+
+            char buffer1[10];
+            char buffer2[10];
+
+            int8_t ret1 = snprintf(buffer1, sizeof buffer1, "%.2lu", avgSound);
+            int8_t ret2 = snprintf(buffer2, sizeof buffer2, "%.2lu", avgMotion);
+
+            if (ret1 < 0 || ret2 < 0)
+            {
+                ESP_LOGE("convert float to char", "failed to convert float to char");
+            }
+
+            esp_mqtt_client_publish(client, "monitoring-system/sound_sensor", buffer1, 0, 0, 0);
+            esp_mqtt_client_publish(client, "monitoring-system/motion_sensor", buffer2, 0, 0, 0);
+
+            index1 = 0, index2 = 0;
+        }else {
+             index2++;
+             index1++;
+
+        }
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
@@ -241,10 +308,9 @@ void app_main()
         ESP_LOGE("soundToMQTTQueue ", "Queue couldn't be created");
     }
 
-
-    xTaskCreate(publish_message, "publish message", configMINIMAL_STACK_SIZE * 5, NULL, 5, NULL);
+     xTaskCreate(publish_message, "publish message", configMINIMAL_STACK_SIZE * 5, NULL, 5, NULL);
 
     xTaskCreate(sound_sensor, "Sound Sensor", configMINIMAL_STACK_SIZE * 5, NULL, 5, NULL);
 
-    xTaskCreate(motion_sensor, "motion Sensor", configMINIMAL_STACK_SIZE * 5, NULL, 5, NULL);
+     xTaskCreate(motion_sensor, "motion Sensor", configMINIMAL_STACK_SIZE * 5, NULL, 5, NULL);
 }
