@@ -36,6 +36,7 @@ static char *TAG = "adc_oneshot";
 
 adc_oneshot_unit_handle_t adc1_handle;
 adc_cali_handle_t adc1_cali_chan4_handle = NULL;
+adc_cali_handle_t adc1_cali_chan5_handle = NULL;
 
 QueueHandle_t soundToMQTTQueue;
 QueueHandle_t motionToMQTTQueue;
@@ -121,6 +122,7 @@ void initializeADC_OneShot()
         .atten = ADC_ATTEN_DB_0,
     };
     ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, ADC1_CHANNEL_4, &config));
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, ADC1_CHANNEL_5, &config));
 }
 
 void arraytracker(int val, int index, int sensorTyp)
@@ -151,7 +153,7 @@ void arraytracker(int val, int index, int sensorTyp)
 int avgCalcu(int *values, int valCo)
 {
 
-    uint32_t sum = 0.0;
+    int sum = 0.0;
     for (int i = 0; i < valCo; i++)
     {
         sum += values[i];
@@ -192,19 +194,19 @@ void sound_sensor(void *pvParameters)
 
             bool do_calibration1_chan0 = example_adc_calibration_init(ADC_UNIT_1, ADC1_CHANNEL_4, ADC_ATTEN_DB_0, &adc1_cali_chan4_handle);
 
-            ESP_LOGI("sound_sensor_one_shot", "sound_sensor_one_shot raw value: %d", adc_raw);
+            ESP_LOGI("sound_sensor", "sound_sensor_one_shot raw value: %d", adc_raw);
             if (do_calibration1_chan0)
             {
                 ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan4_handle, adc_raw, &voltage));
-                ESP_LOGI("sound_sensor_one_shot", "sound_sensor_one_shot voltage %dmV", voltage);
+                ESP_LOGI("sound_sensor", "sound_sensor_one_shot voltage %dmV \n", voltage);
             }
 
-            vTaskDelay(pdMS_TO_TICKS(100));
+            vTaskDelay(pdMS_TO_TICKS(500));
             arraytracker(voltage, c, 1);
             c++;
         }
 
-        char printarr[avg_sound_SIZE * 2 - 1];
+        char printarr[avg_sound_SIZE * 2];
         char *result = printArray(average_data.avg_sound, avg_sound_SIZE, printarr);
 
         printf("sound_array : %s \n", result);
@@ -231,23 +233,23 @@ void motion_sensor(void *pvParameters)
         int c = 0;
         while (c < 10)
         {
-            ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, ADC1_CHANNEL_4, &adc_raw));
+            ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, ADC1_CHANNEL_5, &adc_raw));
 
-            bool do_calibration1_chan0 = example_adc_calibration_init(ADC_UNIT_1, ADC1_CHANNEL_4, ADC_ATTEN_DB_0, &adc1_cali_chan4_handle);
+            bool do_calibration1_chan0 = example_adc_calibration_init(ADC_UNIT_1, ADC1_CHANNEL_5, ADC_ATTEN_DB_0, &adc1_cali_chan5_handle);
 
-            ESP_LOGI("sound_sensor_one_shot", "sound_sensor_one_shot raw value: %d", adc_raw);
+            ESP_LOGI("motion_sensor", "motion_sensor_one_shot raw value: %d", adc_raw);
             if (do_calibration1_chan0)
             {
-                ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan4_handle, adc_raw, &voltage));
-                ESP_LOGI("sound_sensor_one_shot", "sound_sensor_one_shot voltage %dmV", voltage);
+                ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan5_handle, adc_raw, &voltage));
+                ESP_LOGI("motion_sensor", "motion_sensor_one_shot voltage %dmV \n", voltage);
             }
 
-            vTaskDelay(pdMS_TO_TICKS(100));
+            vTaskDelay(pdMS_TO_TICKS(500));
             arraytracker(voltage, c, 2);
             c++;
         }
 
-        char printarr[avg_motion_SIZE * 2 - 1];
+        char printarr[avg_motion_SIZE * 2 ];
         char *result = printArray(average_data.avg_motion, sizeof(average_data.avg_motion) / sizeof(average_data.avg_motion[0]), printarr);
 
         printf("motion_array: %s\n", result);
@@ -327,24 +329,24 @@ void publish_message()
 
     while (1)
     {
-        uint32_t sound;
-        uint32_t motion;
+        int sound;
+        int motion;
 
         if (xQueueReceive(soundToMQTTQueue, &sound, ((TickType_t)5)) == pdTRUE)
         {
-            ESP_LOGI("soundToMQTTQueue", "Sound received: %lu \n", sound);
+            ESP_LOGI("soundToMQTTQueue", "Sound received: %d \n", sound);
         }
 
         if (xQueueReceive(motionToMQTTQueue, &motion, ((TickType_t)5)) == pdTRUE)
         {
-            ESP_LOGI("soundToMQTTQueue", "motion received: %lu \n", motion);
+            ESP_LOGI("soundToMQTTQueue", "motion received: %d \n", motion);
         }
 
         char buffer1[10];
         char buffer2[10];
 
-        int8_t ret1 = snprintf(buffer1, sizeof buffer1, "%.2lu", sound);
-        int8_t ret2 = snprintf(buffer2, sizeof buffer2, "%.2lu", motion);
+        int8_t ret1 = snprintf(buffer1, sizeof buffer1, "%.2d", sound);
+        int8_t ret2 = snprintf(buffer2, sizeof buffer2, "%.2d", motion);
 
         if (ret1 < 0 || ret2 < 0)
         {
@@ -354,12 +356,14 @@ void publish_message()
         esp_mqtt_client_publish(client, "monitoring-system/sound_sensor", buffer1, 0, 0, 0);
         esp_mqtt_client_publish(client, "monitoring-system/motion_sensor", buffer2, 0, 0, 0);
 
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(5000));
     }
 }
 
 void app_main()
 {
+    initializeADC_OneShot();
+
     esp_err_t ret = nvs_flash_init(); // NVS-Flash-Speicher initialisieren
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
     {
@@ -391,9 +395,14 @@ void app_main()
         ESP_LOGE("soundToMQTTQueue ", "Queue couldn't be created");
     }
 
+
+
+
     xTaskCreate(publish_message, "publish message", configMINIMAL_STACK_SIZE * 5, NULL, 5, NULL);
 
     xTaskCreate(sound_sensor, "Sound Sensor", configMINIMAL_STACK_SIZE * 5, NULL, 5, NULL);
 
     xTaskCreate(motion_sensor, "motion Sensor", configMINIMAL_STACK_SIZE * 5, NULL, 5, NULL);
+    
+
 }
