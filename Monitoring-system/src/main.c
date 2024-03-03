@@ -5,24 +5,26 @@
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
-#include <esp_log.h>
+
 #include "nvs_flash.h"
 #include "esp_netif.h"
 #include "driver/i2c.h"
 #include "math.h"
 #include <string.h>
-#include <esp_log.h>
+
 #include "esp_adc/adc_cali.h"
-#include <driver/adc.h>
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include <esp_log.h>
 #include <inttypes.h>
 
+
+
 #include <freertos/queue.h>
 
 #include "wifi.h"
+
 
 esp_mqtt_client_handle_t client;
 
@@ -121,8 +123,8 @@ void initializeADC_OneShot()
         .bitwidth = ADC_BITWIDTH_DEFAULT,
         .atten = ADC_ATTEN_DB_0,
     };
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, ADC1_CHANNEL_4, &config));
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, ADC1_CHANNEL_5, &config));
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, ADC_CHANNEL_4, &config));
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, ADC_CHANNEL_5, &config));
 }
 
 void arraytracker(int val, int index, int sensorTyp)
@@ -190,9 +192,9 @@ void sound_sensor(void *pvParameters)
         int c = 0;
         while (c < 10)
         {
-            ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, ADC1_CHANNEL_4, &adc_raw));
+            ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, ADC_CHANNEL_4, &adc_raw));
 
-            bool do_calibration1_chan0 = example_adc_calibration_init(ADC_UNIT_1, ADC1_CHANNEL_4, ADC_ATTEN_DB_0, &adc1_cali_chan4_handle);
+            bool do_calibration1_chan0 = example_adc_calibration_init(ADC_UNIT_1, ADC_CHANNEL_4, ADC_ATTEN_DB_0, &adc1_cali_chan4_handle);
 
             ESP_LOGI("sound_sensor", "sound_sensor_one_shot raw value: %d", adc_raw);
             if (do_calibration1_chan0)
@@ -233,9 +235,9 @@ void motion_sensor(void *pvParameters)
         int c = 0;
         while (c < 10)
         {
-            ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, ADC1_CHANNEL_5, &adc_raw));
+            ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, ADC_CHANNEL_5, &adc_raw));
 
-            bool do_calibration1_chan0 = example_adc_calibration_init(ADC_UNIT_1, ADC1_CHANNEL_5, ADC_ATTEN_DB_0, &adc1_cali_chan5_handle);
+            bool do_calibration1_chan0 = example_adc_calibration_init(ADC_UNIT_1, ADC_CHANNEL_5, ADC_ATTEN_DB_0, &adc1_cali_chan5_handle);
 
             ESP_LOGI("motion_sensor", "motion_sensor_one_shot raw value: %d", adc_raw);
             if (do_calibration1_chan0)
@@ -360,6 +362,8 @@ void publish_message()
     }
 }
 
+
+
 void app_main()
 {
     initializeADC_OneShot();
@@ -397,12 +401,14 @@ void app_main()
 
 
 
-
+  
     xTaskCreate(publish_message, "publish message", configMINIMAL_STACK_SIZE * 5, NULL, 5, NULL);
 
     xTaskCreate(sound_sensor, "Sound Sensor", configMINIMAL_STACK_SIZE * 5, NULL, 5, NULL);
 
     xTaskCreate(motion_sensor, "motion Sensor", configMINIMAL_STACK_SIZE * 5, NULL, 5, NULL);
     
+
+
 
 }
