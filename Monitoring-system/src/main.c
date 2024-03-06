@@ -317,7 +317,7 @@ esp_mqtt_client_handle_t mqttclient()
 {
 
     esp_mqtt_client_config_t mqtt_cfg = {
-        .broker.address.uri = "mqtt://193.174.24.220:1883"};
+        .broker.address.uri = "mqtt://193.174.29.133:1883"};
 
     esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
 
