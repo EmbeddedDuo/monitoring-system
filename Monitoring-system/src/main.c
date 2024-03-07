@@ -1,30 +1,60 @@
-#include <stdio.h>
-#include <freertos/FreeRTOS.h>
-#include <stdlib.h>
-#include <mqtt_client.h>
-#include "esp_system.h"
-#include "esp_wifi.h"
-#include "esp_event.h"
 
-#include "nvs_flash.h"
+#include <esp_log.h>
+#include <stdlib.h>
+#include <esp_system.h>
+#include <mqtt_client.h>
+#include <nvs_flash.h>
+#include <sys/param.h>
+#include <string.h>
+#include <stdio.h>
+#include <esp_http_server.h>
+#include <esp_event.h>
 #include "esp_netif.h"
 #include "driver/i2c.h"
 #include "math.h"
-#include <string.h>
 
-#include "esp_adc/adc_cali.h"
-#include "esp_adc/adc_oneshot.h"
-#include "esp_adc/adc_cali.h"
-#include "esp_adc/adc_cali_scheme.h"
-#include <esp_log.h>
-#include <inttypes.h>
-
-
-
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <freertos/queue.h>
 
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
+#include <inttypes.h>
+
+#include "esp_timer.h"
+
+
+#include "esp_spiffs.h"
+
+// support IDF 5.x
+#ifndef portTICK_RATE_MS
+#define portTICK_RATE_MS portTICK_PERIOD_MS
+#endif
+
+#include "esp_camera.h"
 #include "wifi.h"
 
+
+// WROVER-KIT PIN Map
+
+#define CAM_PIN_PWDN -1  // power down is not used
+#define CAM_PIN_RESET -1 // software reset will be performed
+#define CAM_PIN_XCLK 21
+#define CAM_PIN_SIOD 26
+#define CAM_PIN_SIOC 27
+
+#define CAM_PIN_D7 35
+#define CAM_PIN_D6 34
+#define CAM_PIN_D5 39
+#define CAM_PIN_D4 36
+#define CAM_PIN_D3 19
+#define CAM_PIN_D2 18
+#define CAM_PIN_D1 5
+#define CAM_PIN_D0 4
+#define CAM_PIN_VSYNC 25
+#define CAM_PIN_HREF 23
+#define CAM_PIN_PCLK 22
 
 esp_mqtt_client_handle_t client;
 
@@ -43,141 +73,136 @@ adc_cali_handle_t adc1_cali_chan5_handle = NULL;
 QueueHandle_t soundToMQTTQueue;
 QueueHandle_t motionToMQTTQueue;
 
-struct average_data_t
+
+static const char *TAG = "example:take_picture";
+
+const char *index_html =
+    "<!DOCTYPE html>\n"
+    "<html lang=\"en\">\n"
+    " <script> \n"
+    "    function fetchImage() { \n"
+    "        fetch(\"/capture\") \n"
+    "            .then(response => response.blob()) \n"
+    "            .then(blob => { \n"
+    "                const imageUrl = URL.createObjectURL(blob); \n"
+    "                document.getElementById(\"capturedImage\").src = imageUrl; \n"
+    "            }) \n"
+    "            .catch(error => console.error('Error fetching image:', error)); \n"
+    "    } \n"
+    "    // Call fetchImage every 5 seconds (5000 milliseconds) \n"
+    "    setInterval(fetchImage, 100); \n"
+    "</script> \n"
+    "<head>\n"
+    "    <meta charset=\"UTF-8\">\n"
+    "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
+    "    <title>ESP32 Camera Image</title>\n"
+    "</head>\n"
+    "<body>\n"
+    "    <h1>ESP32 Camera Image</h1>\n"
+    "    <img  id=\"capturedImage\" src=\"/capture\" alt=\"Captured Image\" width=\"640\" height=\"480\">\n"
+    "</body>\n"
+    "</html>\n";
+
+#if ESP_CAMERA_SUPPORTED
+camera_config_t camera_config = {
+    .pin_pwdn = CAM_PIN_PWDN,
+    .pin_reset = CAM_PIN_RESET,
+    .pin_xclk = CAM_PIN_XCLK,
+    .pin_sscb_sda = CAM_PIN_SIOD,
+    .pin_sscb_scl = CAM_PIN_SIOC,
+
+    .pin_d7 = CAM_PIN_D7,
+    .pin_d6 = CAM_PIN_D6,
+    .pin_d5 = CAM_PIN_D5,
+    .pin_d4 = CAM_PIN_D4,
+    .pin_d3 = CAM_PIN_D3,
+    .pin_d2 = CAM_PIN_D2,
+    .pin_d1 = CAM_PIN_D1,
+    .pin_d0 = CAM_PIN_D0,
+    .pin_vsync = CAM_PIN_VSYNC,
+    .pin_href = CAM_PIN_HREF,
+    .pin_pclk = CAM_PIN_PCLK,
+
+    .xclk_freq_hz = 20000000, //The frequency at which the external clock generator (XCLK) of the camera module is operated, 
+                                //A higher XCLK frequency normally enables faster image acquisition, as the pixels can be read out more quickly. 
+    .ledc_timer = LEDC_TIMER_0,
+    .ledc_channel = LEDC_CHANNEL_0,
+
+    .pixel_format = PIXFORMAT_JPEG, // JPEG
+    .frame_size = FRAMESIZE_VGA,    //  640x480  (Do not use sizes above QVGA when not JPEG )
+
+	.jpeg_quality = 4, //0-63 lower number means higher quality (4 and above recommended)
+	.fb_count = 1		// number of frame buffers allocated for camera initialization
+};
+
+static esp_err_t init_camera()
 {
-    int avg_sound[10];
-    int avg_motion[10];
-
-} average_data;
-
-int avg_sound_SIZE = sizeof(average_data.avg_sound) / sizeof(average_data.avg_sound[0]);
-int avg_motion_SIZE = (sizeof(average_data.avg_motion) / sizeof(average_data.avg_motion[0]));
-
-static bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle)
-{
-    adc_cali_handle_t handle = NULL;
-    esp_err_t ret = ESP_FAIL;
-    bool calibrated = false;
-
-#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
-    if (!calibrated)
+    // initialize the camera and allocates framebuffer
+    esp_err_t err = esp_camera_init(&camera_config);
+    if (err != ESP_OK)
     {
-        ESP_LOGI(TAG, "calibration scheme version is %s", "Curve Fitting");
-        adc_cali_curve_fitting_config_t cali_config = {
-            .unit_id = unit,
-            .chan = channel,
-            .atten = atten,
-            .bitwidth = ADC_BITWIDTH_DEFAULT,
-        };
-        ret = adc_cali_create_scheme_curve_fitting(&cali_config, &handle);
-        if (ret == ESP_OK)
-        {
-            calibrated = true;
-        }
+        ESP_LOGE(TAG, "Camera Init Failed");
+        return err;
     }
+
+    return ESP_OK;
+}
+
 #endif
 
-#if ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
-    if (!calibrated)
+static esp_err_t capture_and_send_image(httpd_req_t *req)
+{
+    camera_fb_t *fb = esp_camera_fb_get(); // Obtain pointer to a frame buffer
+    if (!fb)
     {
-        ESP_LOGI(TAG, "calibration scheme version is %s", "Line Fitting");
-        adc_cali_line_fitting_config_t cali_config = {
-            .unit_id = unit,
-            .atten = atten,
-            .bitwidth = ADC_BITWIDTH_DEFAULT,
-        };
-        ret = adc_cali_create_scheme_line_fitting(&cali_config, &handle);
-        if (ret == ESP_OK)
-        {
-            calibrated = true;
-        }
+        ESP_LOGE(TAG, "Camera capture failed");
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
     }
-#endif
-
-    *out_handle = handle;
-    if (ret == ESP_OK)
-    {
-        ESP_LOGI(TAG, "Calibration Success");
-    }
-    else if (ret == ESP_ERR_NOT_SUPPORTED || !calibrated)
-    {
-        ESP_LOGW(TAG, "eFuse not burnt, skip software calibration");
-    }
-    else
-    {
-        ESP_LOGE(TAG, "Invalid arg or no memory");
-    }
-
-    return calibrated;
+    httpd_resp_set_type(req, "image/jpeg");
+    httpd_resp_send(req, (const char *)fb->buf, fb->len);
+    esp_camera_fb_return(fb);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    return ESP_OK;
 }
 
-void initializeADC_OneShot()
+esp_err_t index_handler(httpd_req_t *req)
 {
-    adc_oneshot_unit_init_cfg_t init_config1 = {
-        .unit_id = ADC_UNIT_1,
-        .ulp_mode = ADC_ULP_MODE_DISABLE,
-    };
-    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config1, &adc1_handle));
-
-    adc_oneshot_chan_cfg_t config = {
-        .bitwidth = ADC_BITWIDTH_DEFAULT,
-        .atten = ADC_ATTEN_DB_0,
-    };
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, ADC_CHANNEL_4, &config));
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, ADC_CHANNEL_5, &config));
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, index_html, strlen(index_html));
+    return ESP_OK;
 }
 
-void arraytracker(int val, int index, int sensorTyp)
+httpd_uri_t index_uri = {
+    .uri = "/",
+    .method = HTTP_GET,
+    .handler = index_handler,
+    .user_ctx = NULL};
+
+httpd_uri_t capture_uri = {
+    .uri = "/capture",
+    .method = HTTP_GET,
+    .handler = capture_and_send_image,
+    .user_ctx = NULL };
+
+httpd_handle_t start_webserver(void)
 {
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    httpd_handle_t server = NULL;
 
-    switch (sensorTyp)
+    if (httpd_start(&server, &config) == ESP_OK)
     {
-    case 1:
-        if (index < avg_sound_SIZE)
-        {
-            average_data.avg_sound[index] = val;
-        }
-
-        break;
-    case 2:
-        if (index < avg_motion_SIZE)
-        {
-            average_data.avg_motion[index] = val;
-        }
-
-        break;
-
-    default:
-        break;
+        httpd_register_uri_handler(server, &capture_uri); // Register the URI handler for the image
+        httpd_register_uri_handler(server, &index_uri); 
+        return server;
     }
+
+    return NULL;
 }
 
-int avgCalcu(int *values, int valCo)
+void stop_webserver(httpd_handle_t server)
 {
-
-    int sum = 0.0;
-    for (int i = 0; i < valCo; i++)
-    {
-        sum += values[i];
-    }
-
-    return (sum / valCo);
-}
-
-char *printArray(int *x, int size, char *arr)
-{
-
-    int offset = 0;
-    for (int i = 0; i < size; i++)
-    {
-        offset += sprintf(arr + offset, "%d", x[i]);
-        if (i < size - 1)
-        {
-            offset += sprintf(arr + offset, ", ");
-        }
-    }
-
-    return arr;
+    httpd_stop(server);
 }
 
 void sound_sensor(void *pvParameters)
@@ -363,11 +388,8 @@ void publish_message()
 }
 
 
-
 void app_main()
 {
-    initializeADC_OneShot();
-
     esp_err_t ret = nvs_flash_init(); // NVS-Flash-Speicher initialisieren
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
     {
@@ -385,7 +407,14 @@ void app_main()
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 
-    client = mqttclient();
+
+    // Initialize camera
+    ESP_ERROR_CHECK(init_camera());   
+
+    // Start the HTTP webserver
+    httpd_handle_t server = start_webserver();
+
+     client = mqttclient();
 
     soundToMQTTQueue = xQueueCreate(2, sizeof(float));
     if (soundToMQTTQueue == NULL)
@@ -399,8 +428,6 @@ void app_main()
         ESP_LOGE("soundToMQTTQueue ", "Queue couldn't be created");
     }
 
-
-
   
     xTaskCreate(publish_message, "publish message", configMINIMAL_STACK_SIZE * 5, NULL, 5, NULL);
 
@@ -408,7 +435,7 @@ void app_main()
 
     xTaskCreate(motion_sensor, "motion Sensor", configMINIMAL_STACK_SIZE * 5, NULL, 5, NULL);
     
-
-
-
+    // Stop the HTTP webserver
+    stop_webserver(server);
 }
+
