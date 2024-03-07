@@ -1,0 +1,2 @@
+idf_component_register(SRCS "self-created-functions.c"
+                        INCLUDE_DIRS .)
