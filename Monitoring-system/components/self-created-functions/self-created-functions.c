@@ -11,6 +11,12 @@ int avgCalcu(int *values, int valCo)
         sum += values[i];
     }
 
+    /*
+    for (int i = 0; i < valCo; i++)
+    {
+        printf("%d \n",values[i] );
+    } */
+
     return (sum / valCo);
 }
 
