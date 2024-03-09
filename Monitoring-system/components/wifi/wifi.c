@@ -1,5 +1,6 @@
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_wifi.h"
 #include <wifi.h>
 
 
@@ -9,6 +10,8 @@
 static const char *TAG = "wifi_station";
 
 bool wifi_established = false;
+
+
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
@@ -29,6 +32,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "got ip : " IPSTR "\n", IP2STR(&event->ip_info.ip)); // IP-Adresse erhalten
         wifi_established = true;                                           // WLAN-Verbindung hergestellt
+        esp_wifi_set_ps(0);
     }
     else
     {
@@ -45,7 +49,7 @@ void init_wifi()
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));   // WLAN-Ereignis-Handler registrieren
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL));  // IP-Ereignis-Handler für erfolgreiche WLAN-Verbindung registrieren
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_LOST_IP, &wifi_event_handler, NULL)); // IP-Ereignis-Handler für verlorene WLAN-Verbindung registrieren
-
+    
     wifi_config_t wifi_config = {
         .sta = {
             .ssid = ESP_WIFI_SSID,     // WLAN-SSID konfigurieren

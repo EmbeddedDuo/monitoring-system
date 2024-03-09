@@ -103,7 +103,6 @@ static esp_err_t capture_and_send_image(httpd_req_t *req)
     httpd_resp_set_type(req, "image/jpeg");
     httpd_resp_send(req, (const char *)fb->buf, fb->len);
     esp_camera_fb_return(fb);
-    vTaskDelay(pdMS_TO_TICKS(50));
     return ESP_OK;
 }
 
@@ -178,6 +177,7 @@ void sound_sensor(void *pvParameters)
         while (c < 10)
         {
             ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, ADC_CHANNEL_4, &adc_raw));
+            ESP_LOGI("sound_sensor", "sound_sensor_one_shot raw_values %dmV \n",adc_raw );
 
             bool do_calibration1_chan0 = example_adc_calibration_init(ADC_UNIT_1, ADC_CHANNEL_4, ADC_ATTEN_DB_0, &adc1_cali_chan4_handle);
 

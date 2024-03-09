@@ -64,6 +64,7 @@ bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_at
     else if (ret == ESP_ERR_NOT_SUPPORTED || !calibrated)
     {
         ESP_LOGW(TAG, "eFuse not burnt, skip software calibration");
+        esp_restart();
     }
     else
     {
