@@ -21,7 +21,7 @@ bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_at
     esp_err_t ret = ESP_FAIL;
     bool calibrated = false;
 
-#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED // hecks for support of two calibration schemes - Curve Fitting and Line Fitting
     if (!calibrated)
     {
         ESP_LOGI(TAG, "calibration scheme version is %s", "Curve Fitting");
@@ -48,7 +48,7 @@ bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_at
             .atten = atten,
             .bitwidth = ADC_BITWIDTH_DEFAULT,
         };
-        ret = adc_cali_create_scheme_line_fitting(&cali_config, &handle);
+        ret = adc_cali_create_scheme_line_fitting(&cali_config, &handle); //create a calibration profile
         if (ret == ESP_OK)
         {
             calibrated = true;
@@ -61,6 +61,11 @@ bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_at
     {
         ESP_LOGI(TAG, "Calibration Success");
     }
+    /*
+   if  not supported  eFuse (a one-time programmable memory on the ESP32 used for storing factory calibration data) is not burnt,
+   it warns that software calibration is skipped and restarts the ESP32.
+    */
+
     else if (ret == ESP_ERR_NOT_SUPPORTED || !calibrated)
     {
         ESP_LOGW(TAG, "eFuse not burnt, skip software calibration");
@@ -78,14 +83,15 @@ void initializeADC_OneShot()
 {
     adc_oneshot_unit_init_cfg_t init_config1 = {
         .unit_id = ADC_UNIT_1,
-        .ulp_mode = ADC_ULP_MODE_DISABLE,
+        .ulp_mode = ADC_ULP_MODE_DISABLE, // Ultra Low Power
     };
-    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config1, &adc1_handle));
+    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config1, &adc1_handle)); // initialize an ADC unit for one-shot measurements 
 
     adc_oneshot_chan_cfg_t config = {
-        .bitwidth = ADC_BITWIDTH_DEFAULT,
-        .atten = ADC_ATTEN_DB_0,
+        .bitwidth = ADC_BITWIDTH_DEFAULT, // how many discrete values it can produce from the analog input signal
+        .atten = ADC_ATTEN_DB_0,          // Attenuation refers to reducing the amplitude of the input signal without altering its information content
     };
+    // Configures two ADC channels
     ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, ADC_CHANNEL_4, &config));
     ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, ADC_CHANNEL_5, &config));
 }

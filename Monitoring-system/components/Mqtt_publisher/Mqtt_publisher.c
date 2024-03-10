@@ -4,7 +4,6 @@
 
 #include "Mqtt_publisher.h"
 
-
 const char *mqttTag = "mqtt";
 
 esp_mqtt_client_handle_t client;
@@ -59,12 +58,13 @@ esp_mqtt_client_handle_t mqttclient()
 {
 
     esp_mqtt_client_config_t mqtt_cfg = {
-        .broker.address.uri = "mqtt://193.174.29.133:1883"};
+        .broker.address.uri = "mqtt://193.174.29.133:1883"}; // MQTT client configuration with the broker's URI.
 
-    esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
+    esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg); // Initializes the MQTT client with the configuration
 
-    ESP_ERROR_CHECK(esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL));
+    ESP_ERROR_CHECK(esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL)); // Registers the event handler function to handle
+                                                                                                         // MQTT events for this client
     ESP_ERROR_CHECK(esp_mqtt_client_start(client));
 
-    return client;
+    return client;  //returns handle 
 }
