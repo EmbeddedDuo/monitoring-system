@@ -4,6 +4,7 @@ Sensors
 
 # Configuration 
 - In the SDK config you have to put your WIFI SSID and Password to make the code work properly.
+- for the Installation you need an ESP32 Wrover with the Camera and 2 Sensors, a Motion Sensor and a Loudness Sensor
 
 
 # Used Sources :
