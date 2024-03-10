@@ -18,8 +18,6 @@ const char *index_html =
     "            }) \n"
     "            .catch(error => console.error('Error fetching image:', error)); \n"
     "    } \n"
-    "    // Call fetchImage every 0.1 seconds \n"
-    "    setInterval(fetchImage, 100); \n"
     "</script> \n"
     "<head>\n"
     "    <meta charset=\"UTF-8\">\n"

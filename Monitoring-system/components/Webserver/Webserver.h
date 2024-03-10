@@ -2,18 +2,27 @@
 #include <esp_http_server.h>
 
 /**
- * @brief Web-Interface, das zur Anzeige eines von der ESP32-Kamera aufgenommenen Bildes bietet
+ * @brief Web interface that allows you to view an image captured by the ESP32 camera
  * 
  */
-extern const char *index_html;
+extern const char *index_html;  
 
+/**
+ * @brief TAG for Debugging purpose 
+ * 
+ */
 extern const char *CameraTAG ;
+
+/**
+ * @brief  URI handler for the (/) Path
+ * 
+ */
 
 extern httpd_uri_t index_uri ;
 
 
 /**
- * @brief 
+ * @brief handles HTTP GET requests to the root URL (/)
  * 
  * @param req 
  * @return esp_err_t 
@@ -21,7 +30,7 @@ extern httpd_uri_t index_uri ;
 esp_err_t index_handler(httpd_req_t *req);
 
 /**
- * @brief 
+ * @brief stops the webserver
  * 
  * @param server 
  */

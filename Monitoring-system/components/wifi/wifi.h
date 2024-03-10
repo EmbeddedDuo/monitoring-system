@@ -6,7 +6,17 @@
 #include "stdio.h"
 #include "esp_netif.h"
 
+/**
+ * @brief to check if the wifi is established
+ * 
+ */
 extern bool wifi_established;
+
+/**
+ * @brief to store the IP-Adress for the Website
+ * 
+ */
+extern char ipAddress[16];
 
 /**
  * @brief function for initialising wifi
