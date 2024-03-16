@@ -1,5 +1,4 @@
 # monitoring-system
-Sensors
 
 
 # Configuration 
